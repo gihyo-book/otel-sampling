@@ -1,0 +1,15 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第10章 リスト10-0（p.320）サービス別スパン送信レートのPromQLクエリ
+#
+# 書籍からの変更点
+#   - 集計対象を otelcol_exporter_sent_spans_total から、countコネクターで生成した
+#     メトリクスに変更した。Collectorの内部メトリクスは service_name ラベルを
+#     持たないため、書籍のクエリは空の結果を返す。
+#     メトリクスを生成する設定は list-10-0-service-volume.yaml を参照。
+
+# サービス別のスパン送信レート（上位10サービス）
+topk(10,
+  sum by (service_name) (
+    rate(span_count_before_sampling_total[5m])
+  )
+)

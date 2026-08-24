@@ -1,0 +1,93 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第6章 リスト06-6（p.207）routingコネクターによるSeverityベースの重み付けサンプリング設定
+#
+# 書籍からの変更点
+#   - 各 probabilistic_sampler に from_attribute を追加した。
+#     probabilistic_samplerは既定でトレースIDをランダム性の源とし、ランダム性を
+#     取得できないデータを破棄する（fail_closed の既定値は true）。そのため書籍の
+#     設定では、トレースIDを持たないログ（ヘルスチェックやバックグラウンドジョブの
+#     ログなど）が指定したサンプリング率にかかわらず全件破棄される。
+#     from_attribute を指定すると、トレースIDが無いログはそのレコード属性の値を
+#     ランダム性の源として判定される。
+#
+# 注意
+#   - from_attribute に指定した属性を持たないログは、ランダム性を取得できず
+#     fail_closed により破棄される。全ログに一意な識別子を付与できない場合は、
+#     fail_closed: false を指定する（この場合、該当するログは間引かれず全件通過する）。
+#   - トレースIDを持つログは、レコード単位ではなくトレースID単位で判定される。
+#     同一トレースのログはまとめて残るか、まとめて破棄される。
+#
+# 動作確認: OpenTelemetry Collector contrib v0.158.0
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+connectors:
+  # SeverityNumberに基づいてログを振り分け
+  routing/severity:
+    default_pipelines: [logs/debug]
+    table:
+      # ERROR以上（SeverityNumber 17〜24）→ 全量保持パイプライン
+      - condition: log.severity_number >= 17
+        pipelines: [logs/errors]
+      # WARN（SeverityNumber 13〜16）→ 50%サンプリング
+      - condition: log.severity_number >= 13
+        pipelines: [logs/warn]
+      # INFO（SeverityNumber 9〜12）→ 10%サンプリング
+      - condition: log.severity_number >= 9
+        pipelines: [logs/info]
+      # DEBUG以下（SeverityNumber 1〜8）→ defaultのlogs/debug
+
+processors:
+  # WARN（SeverityNumber 13〜16）は50%サンプリング
+  probabilistic_sampler/warn:
+    sampling_percentage: 50
+    # トレースIDが無いログは、このレコード属性をランダム性の源として使う
+    from_attribute: log.record.uid
+
+  # INFO（SeverityNumber 9〜12）は10%サンプリング
+  probabilistic_sampler/info:
+    sampling_percentage: 10
+    from_attribute: log.record.uid
+
+  # DEBUG以下（SeverityNumber 1〜8）は2%サンプリング
+  probabilistic_sampler/debug:
+    sampling_percentage: 2
+    from_attribute: log.record.uid
+
+exporters:
+  otlp:
+    endpoint: backend:4317
+
+service:
+  pipelines:
+    # 入口パイプライン: otlpレシーバーからroutingコネクターへ
+    logs:
+      receivers: [otlp]
+      exporters: [routing/severity]
+
+    # ERROR以上は全量保持（プロセッサーなし）
+    logs/errors:
+      receivers: [routing/severity]
+      exporters: [otlp]
+
+    # WARNは50%サンプリング
+    logs/warn:
+      receivers: [routing/severity]
+      processors: [probabilistic_sampler/warn]
+      exporters: [otlp]
+
+    # INFOは10%サンプリング
+    logs/info:
+      receivers: [routing/severity]
+      processors: [probabilistic_sampler/info]
+      exporters: [otlp]
+
+    # DEBUG以下は2%サンプリング
+    logs/debug:
+      receivers: [routing/severity]
+      processors: [probabilistic_sampler/debug]
+      exporters: [otlp]

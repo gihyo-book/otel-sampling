@@ -1,0 +1,77 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第10章 リスト10-0（p.320）サービス別データ量モニタリング（Collector側の設定）
+#
+# 書籍からの変更点
+#   - 書籍の本文とクエリは otelcol_exporter_sent_spans をサービス名で集計しているが、
+#     Collectorの内部メトリクスはエクスポーター名などCollector自身の属性しか持たず、
+#     通過するテレメトリーのサービス名では集計できない。サービス別に集計するには、
+#     countコネクターで生成したメトリクスを使う。本ファイルはそのための設定で、
+#     対応するクエリは list-10-0-service-span-rate.promql に置いた。
+#   - service.name はリソース属性のため、prometheusエクスポーターの
+#     resource_to_telemetry_conversion を有効にしてラベルに変換する。
+#
+# 書籍のリスト07-7（countコネクターによるサンプリング率の計測）およびリスト10-1
+# （サンプリング前後のデータ量比較クエリ）と同じメトリクスを使う。
+#
+# 動作確認: OpenTelemetry Collector contrib v0.158.0
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+connectors:
+  count/before-sampling:
+    spans:
+      span.count.before_sampling:
+        description: "サンプリング前のスパン数"
+  count/after-sampling:
+    spans:
+      span.count.after_sampling:
+        description: "サンプリング後のスパン数"
+
+processors:
+  tail_sampling:
+    decision_wait: 10s
+    policies:
+      - name: errors-policy
+        type: status_code
+        status_code:
+          status_codes:
+            - ERROR
+      - name: default-probabilistic
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+exporters:
+  otlp/backend:
+    endpoint: backend:4317
+
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # service.name などのリソース属性をメトリクスのラベルに変換する。
+    # これを有効にしないと sum by (service_name) で集計できない
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  pipelines:
+    # サンプリング前のスパン数を計測
+    traces/count-before:
+      receivers: [otlp]
+      exporters: [count/before-sampling]
+
+    # サンプリング処理
+    traces/sampling:
+      receivers: [otlp]
+      processors: [tail_sampling]
+      exporters: [count/after-sampling, otlp/backend]
+
+    # 計測メトリクスをバックエンドに送信
+    metrics/sampling-stats:
+      receivers:
+        - count/before-sampling
+        - count/after-sampling
+      exporters: [prometheus]

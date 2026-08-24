@@ -1,0 +1,83 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第6章 リスト06-7（p.209）signal_to_metricsコネクターによるログからメトリクスへの変換設定
+#
+# 書籍からの変更点
+#   - signal_to_metrics の attributes から service.name を削除した。attributes が
+#     参照するのはログレコード属性だけであり、指定した属性を持たないシグナルは
+#     処理されない。service.name はリソース属性のため、書籍の設定では
+#     log.record.count も log.error.count も生成されない。リソース属性は既定で
+#     出力メトリクスに引き継がれるため、attributes に書く必要はない。
+#   - severity_text はLogRecordのトップレベルフィールドでレコード属性ではないため、
+#     前段の transform プロセッサーでレコード属性へコピーしてから参照する。
+#   - probabilistic_sampler/logs に from_attribute を追加した（リスト06-6と同じ理由。
+#     既定ではトレースIDを持たないログが全件破棄される）。
+#
+# 動作確認: OpenTelemetry Collector contrib v0.158.0
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+connectors:
+  signal_to_metrics:
+    logs:
+      # Severityレベル別のログ出現回数をカウント
+      - name: log.record.count
+        description: "Severityレベル別のログレコード数"
+        sum:
+          value: "1"
+        attributes:
+          # transform/severity-to-attribute でコピーしたレコード属性を参照する
+          - key: severity_text
+
+      # エラーログの出現回数をカウント
+      - name: log.error.count
+        description: "エラーログの出現回数"
+        conditions:
+          - 'severity_number >= 17'
+        sum:
+          value: "1"
+        attributes:
+          - key: error.type
+            optional: true
+
+processors:
+  # signal_to_metrics はレコード属性しか参照できないため、
+  # トップレベルフィールドの severity_text をレコード属性へコピーする
+  transform/severity-to-attribute:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(attributes["severity_text"], severity_text)
+
+  # ログ本体は10%のみ保持
+  probabilistic_sampler/logs:
+    sampling_percentage: 10
+    # トレースIDが無いログは、このレコード属性をランダム性の源として使う
+    from_attribute: log.record.uid
+
+exporters:
+  otlp/logs:
+    endpoint: log-backend:4317
+  otlp/metrics:
+    endpoint: metrics-backend:4317
+
+service:
+  pipelines:
+    # ログ → メトリクス変換パイプライン
+    logs/to-metrics:
+      receivers: [otlp]
+      processors: [transform/severity-to-attribute]
+      exporters: [signal_to_metrics]
+    metrics/from-logs:
+      receivers: [signal_to_metrics]
+      exporters: [otlp/metrics]
+
+    # ログ本体のサンプリングパイプライン
+    logs/sampled:
+      receivers: [otlp]
+      processors: [probabilistic_sampler/logs]
+      exporters: [otlp/logs]

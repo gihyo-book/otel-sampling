@@ -1,0 +1,38 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第4章 リスト04-10（p.140）明示的バケットによるヒストグラム設定
+#
+# 書籍からの変更点
+#   - histogram.explicit.buckets の値に単位を付けた。このフィールドはduration型で
+#     あり、単位のない整数はミリ秒ではなくナノ秒として解釈される。
+#   - 単体で otelcol validate を通すため receivers / exporters / service を補った。
+#
+# 動作確認: OpenTelemetry Collector contrib v0.158.0
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+connectors:
+  span_metrics:
+    histogram:
+      # 明示的バケット: 任意の境界値を単位付きで指定
+      explicit:
+        buckets:
+          [2ms, 4ms, 6ms, 8ms, 10ms, 50ms, 100ms, 200ms, 400ms, 800ms, 1s, 5s, 10s]
+
+exporters:
+  otlp/backend:
+    endpoint: backend:4317
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [span_metrics, otlp/backend]
+    metrics:
+      receivers: [span_metrics]
+      exporters: [prometheus]

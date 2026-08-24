@@ -1,0 +1,15 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第9章 リスト09-4（p.309）テナント別データ量モニタリングのPromQLクエリ例
+#
+# 書籍からの変更点
+#   - 集計対象を otelcol_receiver_accepted_spans_total から、countコネクターで
+#     生成したメトリクスに変更した。Collectorの内部メトリクスは tenant_id ラベルを
+#     持たないため、書籍のクエリは空の結果を返す。
+#     メトリクスを生成する設定は list-09-4-tenant-volume.yaml を参照。
+
+# テナント別のスパン受信レート（上位10テナント）
+topk(10,
+  sum by (tenant_id) (
+    rate(span_count_by_tenant_total[5m])
+  )
+)

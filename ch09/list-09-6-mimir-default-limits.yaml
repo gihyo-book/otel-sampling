@@ -1,0 +1,14 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第9章 リスト09-6（p.312）関連：Grafana Mimirの既定リミット設定
+#     （メイン設定ファイル = mimir.yaml に記述する）
+#
+# ランタイム設定の overrides で上書きされないテナントは、ここで定義した値を
+# 継承する。書籍のリスト09-6は overrides 直下に defaults ブロックを置いていたが、
+# 既定値はこちらに書く。
+#
+# 動作確認: Grafana Mimir 2.x
+
+limits:
+  ingestion_rate: 10000          # サンプル/秒
+  ingestion_burst_size: 200000
+  max_global_series_per_user: 150000

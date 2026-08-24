@@ -1,0 +1,57 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第5章 リスト05-1（p.177）intervalプロセッサーによるメトリクスダウンサンプリング設定例
+#
+# 書籍からの変更点
+#   - metrics/downsampled パイプラインに filter/non-critical-metrics を追加した。
+#     同一のレシーバーを複数のパイプラインが参照すると全パイプラインにデータの
+#     コピーが流れるため、書籍の設定では重要メトリクスが metrics/critical と
+#     metrics/downsampled の両方を通り、高解像度版と60秒間隔版が同じバックエンドに
+#     二重に書き込まれる。
+#   - 単体で otelcol validate を通すため receivers / exporters を補った。
+#
+# 動作確認: OpenTelemetry Collector contrib v0.158.0
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+
+  interval:
+    interval: 60s  # 60秒間隔にダウンサンプリング
+
+  # 重要なメトリクスは高解像度を維持するため、
+  # filterプロセッサーと組み合わせてパイプラインを分岐する
+  filter/critical-metrics:
+    error_mode: ignore
+    metric_conditions:
+      # 重要なメトリクス以外をドロップし、重要なメトリクスのみ通過させる
+      - 'not IsMatch(metric.name, "http_server_request_duration.*") and not IsMatch(metric.name, "http_server_active_requests") and not IsMatch(metric.name, "process_cpu_seconds_total")'
+
+  # ダウンサンプリング側では、上と逆に重要なメトリクスをドロップする。
+  # これがないと重要なメトリクスが両方のパイプラインを通り、二重に書き込まれる
+  filter/non-critical-metrics:
+    error_mode: ignore
+    metric_conditions:
+      - 'IsMatch(metric.name, "http_server_request_duration.*") or IsMatch(metric.name, "http_server_active_requests") or IsMatch(metric.name, "process_cpu_seconds_total")'
+
+exporters:
+  prometheus_remote_write/backend:
+    endpoint: http://prometheus:9090/api/v1/write
+
+service:
+  pipelines:
+    # 重要なメトリクスは高解像度のままエクスポート
+    metrics/critical:
+      receivers: [otlp]
+      processors: [filter/critical-metrics, batch]
+      exporters: [prometheus_remote_write/backend]
+
+    # その他のメトリクスはダウンサンプリングしてエクスポート
+    metrics/downsampled:
+      receivers: [otlp]
+      processors: [filter/non-critical-metrics, interval, batch]
+      exporters: [prometheus_remote_write/backend]
