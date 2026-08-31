@@ -1,0 +1,75 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第4章 リスト04-5（p.121）ビジネスコンテキストベースサンプリングの設定例
+#
+# 書籍からの変更点
+#   - ポリシー3（high-value-transaction）を numeric_attribute から ottl_condition に
+#     変更した。numeric_attributeポリシーは整数型の属性しか評価せず、表4-6が
+#     浮動小数点数型としている transaction.amount（例: 15000.50）には一致しないため、
+#     書籍の設定では高額取引が保持されない。
+#     transaction.amount を最小通貨単位の整数で記録している場合は、書籍どおり
+#     numeric_attribute を使用できる。
+#   - 単体で otelcol validate を通すため receivers / exporters / service を補った。
+#
+# 動作確認: OpenTelemetry Collector contrib v0.158.0
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  tail_sampling:
+    decision_wait: 10s   # 基本パラメータの詳細は第3章を参照
+    num_traces: 100000   # 基本パラメータの詳細は第3章を参照
+    policies:
+      # ポリシー1: 高優先度トランザクションは全量保持
+      - name: high-priority
+        type: string_attribute
+        string_attribute:
+          key: priority.flag
+          values:
+            - high
+
+      # ポリシー2: 最上位SLAは50%保持
+      - name: gold-sla
+        type: and
+        and:
+          and_sub_policy:
+            - name: is-gold-sla
+              type: string_attribute
+              string_attribute:
+                key: sla.tier
+                values:
+                  - gold
+            - name: gold-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: 50
+
+      # ポリシー3: 高額取引（10,000以上）は全量保持
+      # 小数を含む金額を扱うため、整数型のみを評価するnumeric_attributeではなく
+      # ottl_conditionを使用する
+      - name: high-value-transaction
+        type: ottl_condition
+        ottl_condition:
+          error_mode: ignore
+          span:
+            - 'span.attributes["transaction.amount"] >= 10000'
+
+      # ポリシー4: その他のトランザクションは10%保持
+      - name: default-business-rate
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+exporters:
+  otlp/backend:
+    endpoint: backend:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [tail_sampling]
+      exporters: [otlp/backend]

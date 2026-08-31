@@ -1,0 +1,63 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第4章 リスト04-9（p.139）span_metricsコネクターの基本設定例
+#
+# 書籍からの変更点
+#   - histogram.explicit.buckets の値に単位を付けた。このフィールドはduration型で
+#     あり、単位のない整数はミリ秒ではなくナノ秒として解釈される。書籍の設定では
+#     バケット境界が2ns〜10µsとなり、起動エラーにはならないままヒストグラムが
+#     実質的に機能しない。
+#
+# 動作確認: OpenTelemetry Collector contrib v0.158.0
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+connectors:
+  span_metrics:
+    # メトリクス名の接頭辞（例: traces.duration, traces.calls）
+    namespace: traces
+    # ヒストグラムの設定
+    histogram:
+      # 明示的バケット境界（単位付きで指定する）
+      explicit:
+        buckets:
+          [2ms, 4ms, 6ms, 8ms, 10ms, 50ms, 100ms, 200ms, 400ms, 800ms, 1s, 5s, 10s]
+    # 追加ディメンション（ラベル）の設定
+    dimensions:
+      - name: http.request.method
+      - name: http.response.status_code
+      - name: http.route
+      - name: rpc.method
+      - name: rpc.service
+    # メトリクスの有効期限（この期間スパンが到着しないディメンションの
+    # 時系列はメトリクス出力から除外される）
+    metrics_expiration: 5m
+    # メトリクスのグルーピングキーに使用するリソース属性を限定する
+    resource_metrics_key_attributes:
+      - service.name
+      - deployment.environment
+
+processors:
+  batch:
+
+exporters:
+  otlp/backend:
+    endpoint: backend:4317
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+service:
+  pipelines:
+    # トレースパイプライン: span_metricsコネクターを経由してメトリクスを生成
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [span_metrics, otlp/backend]
+    # メトリクスパイプライン: span_metricsコネクターからメトリクスを受信
+    metrics:
+      receivers: [span_metrics]
+      processors: [batch]
+      exporters: [prometheus]

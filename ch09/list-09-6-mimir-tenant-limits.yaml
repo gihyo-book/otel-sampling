@@ -1,0 +1,28 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第9章 リスト09-6（p.312、p.313）Grafana Mimirのテナント別クォータ設定例
+#     （ランタイム設定ファイル = -runtime-config.file で指定するファイル）
+#
+# 書籍からの変更点
+#   - overrides 直下の defaults ブロックを削除した。overrides 直下に置けるのは
+#     テナントIDだけで、defaults というキーは存在しない。書籍の設定では
+#     「defaults という名前のテナント」として扱われ、既定値としては機能しない。
+#     既定のリミットはメイン設定の limits ブロックで定義する
+#     （list-09-6-mimir-default-limits.yaml を参照）。
+#   - max_series_per_user を max_global_series_per_user に変更した（3箇所）。
+#     max_series_per_user はCortexのフィールド名でMimirには存在せず、Mimirは
+#     未知のフィールドをエラーにするため、書籍の設定はファイル全体が読み込めない。
+#
+# 動作確認: Grafana Mimir 2.x
+
+overrides:
+  # Goldティアテナントのリミット
+  tenant_gold_001:
+    ingestion_rate: 50000
+    ingestion_burst_size: 1000000
+    max_global_series_per_user: 500000
+
+  # Bronzeティアテナントのリミット
+  tenant_bronze_001:
+    ingestion_rate: 5000
+    ingestion_burst_size: 100000
+    max_global_series_per_user: 50000

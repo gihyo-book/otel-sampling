@@ -1,0 +1,63 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第7章 リスト07-1（p.222）transformプロセッサーによる正規表現マスキングの設定例
+#
+# 書籍からの変更点
+#   - メールアドレスのマスキング例のコメントを実際の出力に合わせた。書籍のコメントは
+#     「user@example.com → u***@example.com」としているが、この正規表現はメール
+#     アドレス全体に一致するため、置換結果は常に ***@***.*** になる。
+#     PII除去の例としては全体をマスクするほうが適切なため、正規表現は変更していない。
+#   - 単体で otelcol validate を通すため receivers / exporters / service を補った。
+#
+# 動作確認: OpenTelemetry Collector contrib v0.158.0
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  transform/mask-pii:
+    trace_statements:
+      - context: span
+        statements:
+          # メールアドレスのマスキング
+          # user@example.com → ***@***.***
+          - replace_pattern(attributes["http.url"],
+              "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}",
+              "***@***.***")
+
+          # クレジットカード番号のマスキング（16桁の数字列）
+          # 1234-5678-9012-3456 → ****-****-****-3456
+          - replace_pattern(attributes["payment.card_number"],
+              "\\b\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?(\\d{4})\\b",
+              "****-****-****-$$1")
+
+          # 日本の電話番号のマスキング
+          # 090-1234-5678 → 090-****-****
+          - replace_pattern(attributes["user.phone"],
+              "(0\\d{1,4})[- ]?\\d{1,4}[- ]?\\d{4}",
+              "$$1-****-****")
+    log_statements:
+      - context: log
+        statements:
+          # ログ本文中のメールアドレスをマスキング
+          # user@example.com → ***@***.***
+          - replace_pattern(body,
+              "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}",
+              "***@***.***")
+
+exporters:
+  otlp/backend:
+    endpoint: backend:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [transform/mask-pii]
+      exporters: [otlp/backend]
+    logs:
+      receivers: [otlp]
+      processors: [transform/mask-pii]
+      exporters: [otlp/backend]

@@ -1,0 +1,66 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第6章 リスト06-5（p.203）Collector側でのトレース連動ログサンプリング設定
+#
+# 書籍からの変更点
+#   - filter/sampled-logs の条件を修正した。OTTLの log.trace_id は16バイトの値を
+#     返し、トレースIDが未設定でも nil にはならないため、書籍の 'log.trace_id == nil'
+#     は常に偽となりフィルターが何も破棄しない。空のトレースIDは32桁のゼロに
+#     エンコードされるため、文字列として比較する。
+#   - filterプロセッサーは「条件に一致したものを破棄」するため、コメントを実際の
+#     動作に合わせた。
+#   - groupbytraceプロセッサーはトレース専用でログを扱えない。役割が分かるよう
+#     tracesパイプラインとlogsパイプラインの配線を補った。
+#
+# 注意
+#   トレースIDの有無は「サンプリング済みかどうか」を表さない。SDKのログブリッジは
+#   サンプリングされなかったトレースのログにもトレースIDを付与する。
+#
+# 動作確認: OpenTelemetry Collector contrib v0.158.0
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  # groupbytraceはトレースのみを扱う。テイルサンプリングの前段でスパンをまとめる
+  groupbytrace:
+    wait_duration: 10s
+    num_traces: 10000
+
+  tail_sampling:
+    decision_wait: 10s
+    policies:
+      - name: errors-policy
+        type: status_code
+        status_code:
+          status_codes:
+            - ERROR
+      - name: default-probabilistic
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+  # トレースIDに基づいてログをフィルタリングする
+  filter/sampled-logs:
+    error_mode: ignore
+    log_conditions:
+      # トレースIDを持たないログを破棄する（条件に一致したものが破棄される）
+      - 'log.trace_id.string == "00000000000000000000000000000000"'
+
+exporters:
+  otlp/backend:
+    endpoint: backend:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [groupbytrace, tail_sampling]
+      exporters: [otlp/backend]
+
+    logs:
+      receivers: [otlp]
+      processors: [filter/sampled-logs]
+      exporters: [otlp/backend]

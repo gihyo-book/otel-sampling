@@ -1,0 +1,49 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第9章 リスト09-4（p.309）テナント別データ量モニタリング（Collector側の設定）
+#
+# 書籍からの変更点
+#   - 書籍のクエリは otelcol_receiver_accepted_spans を tenant_id で集計しているが、
+#     Collectorの内部メトリクスはレシーバー名などCollector自身の属性しか持たず、
+#     通過するテレメトリーのテナントIDでは集計できない。テナント別に集計するには、
+#     countコネクターでテナントIDを次元に持つメトリクスを生成する必要がある。
+#     本ファイルはそのための設定で、対応するクエリは
+#     list-09-4-tenant-volume.promql に置いた。
+#
+# 動作確認: OpenTelemetry Collector contrib v0.158.0
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+connectors:
+  # テナントIDを次元に持つスパン数メトリクスを生成する
+  count/tenant-spans:
+    spans:
+      span.count.by_tenant:
+        description: "テナント別のスパン数"
+        attributes:
+          - key: tenant.id
+            default_value: unknown
+
+exporters:
+  otlp/backend:
+    endpoint: backend:4317
+
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # テナントIDをリソース属性として付与している場合は、この設定で
+    # リソース属性がメトリクスのラベルに変換される
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [count/tenant-spans, otlp/backend]
+
+    metrics/tenant-stats:
+      receivers: [count/tenant-spans]
+      exporters: [prometheus]

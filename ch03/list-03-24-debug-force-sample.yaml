@@ -1,0 +1,51 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 第3章 リスト03-24（p.92）デバッグトレースを100%保持するtail samplingポリシー
+#
+# 書籍からの変更点
+#   - debug-force-sampleポリシーを string_attribute から boolean_attribute に変更した。
+#     string_attributeポリシーは文字列型の属性しか評価しないため、SDK側のカスタム
+#     サンプラー（リスト03-21〜03-23）がboolean型で設定する debug.force_sample=true
+#     には一致せず、書籍の設定ではデバッグトレースが保持されない。
+#   - 単体で otelcol validate を通すため receivers / exporters / service を補った。
+#
+# 動作確認: OpenTelemetry Collector contrib v0.158.0
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  tail_sampling:
+    decision_wait: 30s
+    policies:
+      # デバッグフラグが設定されたトレースは100%保持する。
+      # SDKのカスタムサンプラーと連携し、
+      # debug.force_sample属性を持つトレースを確実に残す。
+      - name: debug-force-sample
+        type: boolean_attribute
+        boolean_attribute:
+          key: debug.force_sample
+          value: true
+      # 通常のサンプリングポリシー（以下略）
+      - name: errors-policy
+        type: status_code
+        status_code:
+          status_codes:
+            - ERROR
+      - name: default-probabilistic
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+exporters:
+  otlp/backend:
+    endpoint: backend:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [tail_sampling]
+      exporters: [otlp/backend]

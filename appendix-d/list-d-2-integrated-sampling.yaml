@@ -1,0 +1,168 @@
+# 『OpenTelemetryではじめるテレメトリーサンプリング』サンプルコード
+# 付録D リストd-2（p.415）統合サンプリング戦略のCollector設定
+#
+# 書籍からの変更点
+#   - span_metrics の histogram.explicit.buckets の値に単位を付けた。このフィールドは
+#     duration型であり、単位のない整数はミリ秒ではなくナノ秒として解釈される。
+#     書籍の設定ではバケット境界が2ns〜10µsとなり、起動エラーにはならないまま
+#     ヒストグラムが実質的に機能しない。
+#
+# 補足
+#   この設定の span_metrics が見るのは、SDK側のヘッドサンプリング（第1段階、20%）を
+#   通過したスパンである。テイルサンプリング適用前という意味での「サンプリング前」で
+#   あり、アプリケーションが生成した全量ではない。
+#
+# 動作確認: OpenTelemetry Collector contrib v0.158.0
+
+# OpenTelemetry Collector設定例: 統合サンプリング戦略
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+connectors:
+  # サンプリング前の全量データからメトリクスを生成（基本設定の詳細は第3章を参照）
+  span_metrics:
+    namespace: traces
+    histogram:
+      explicit:
+        buckets:
+          [2ms, 4ms, 6ms, 8ms, 10ms, 50ms, 100ms, 200ms, 400ms, 800ms, 1s, 5s, 10s]
+    dimensions:
+      - name: http.request.method
+      - name: http.response.status_code
+      - name: http.route
+    metrics_expiration: 5m
+    resource_metrics_key_attributes:
+      - service.name
+      - deployment.environment
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+  tail_sampling:
+    # 第1段階で20%に削減されたトレースに対して判定を行う
+    decision_wait: 10s   # 基本パラメータの詳細は第3章を参照
+    num_traces: 50000    # 基本パラメータの詳細は第3章を参照
+    policies:
+      # --- ビジネスコンテキスト（最優先） ---
+      - name: high-priority-transactions
+        type: string_attribute
+        string_attribute:
+          key: priority.flag
+          values:
+            - high
+
+      - name: gold-sla-transactions
+        type: and
+        and:
+          and_sub_policy:
+            - name: is-gold-sla
+              type: string_attribute
+              string_attribute:
+                key: sla.tier
+                values:
+                  - gold
+            - name: gold-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: 50
+
+      # --- リクエストコンテキスト ---
+      - name: error-traces
+        type: status_code
+        status_code:
+          status_codes:
+            - ERROR
+
+      - name: high-latency
+        type: latency
+        latency:
+          threshold_ms: 1000
+
+      - name: critical-endpoints
+        type: and
+        and:
+          and_sub_policy:
+            - name: is-critical-route
+              type: string_attribute
+              string_attribute:
+                key: http.route
+                values:
+                  - /api/checkout
+                  - /api/payment
+                  - /api/auth/login
+            - name: critical-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: 50
+
+      - name: health-check
+        type: and
+        and:
+          and_sub_policy:
+            - name: is-health-check
+              type: string_attribute
+              string_attribute:
+                key: http.route
+                values:
+                  - /health
+                  - /readiness
+                  - /liveness
+            - name: health-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: 1
+
+      # --- ユーザーコンテキスト ---
+      - name: premium-customers
+        type: string_attribute
+        string_attribute:
+          key: customer.segment
+          values:
+            - premium
+            - enterprise
+
+      # --- デフォルト（動的サンプリング率を適用） ---
+      # 注: tail_samplingプロセッサーは動的サンプリング率の
+      # 自動調整機能を持たないため、デフォルトの確率的サンプリングを
+      # 使用する。動的な調整が必要な場合は、Honeycomb Refineryなどの
+      # 外部サンプリングプロキシとの併用を検討する
+      - name: default-rate
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+exporters:
+  otlp/backend:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+service:
+  pipelines:
+    # トレースパイプライン: span_metricsを経由してメトリクスを生成後、
+    # テイルサンプリングを適用
+    traces/metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [span_metrics]
+
+    traces/sampling:
+      receivers: [otlp]
+      processors: [tail_sampling, batch]
+      exporters: [otlp/backend]
+
+    # メトリクスパイプライン: span_metricsからメトリクスを受信
+    metrics:
+      receivers: [span_metrics]
+      processors: [batch]
+      exporters: [prometheus]
